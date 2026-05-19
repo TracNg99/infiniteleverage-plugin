@@ -3,6 +3,7 @@
 # Stage 1: detect if 8-agent team is initialized.
 # Stage 2: check if template version is current.
 # Stage 3: silent pass (routing context is in CLAUDE.md, not re-injected here).
+# Stage 4: inject compact token-usage briefing via usage-context.py.
 
 set -euo pipefail
 
@@ -72,6 +73,15 @@ fi
 
 if [[ -n "$advisory" ]]; then
   emit_context "$advisory"
+fi
+
+# --- Stage 4: Usage awareness (silent on failure) ---
+USAGE_SCRIPT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}/hooks/usage-context.py"
+if [[ -f "$USAGE_SCRIPT" ]]; then
+  usage_line="$(python3 "$USAGE_SCRIPT" 2>/dev/null)" || true
+  if [[ -n "$usage_line" ]]; then
+    emit_context "$usage_line"
+  fi
 fi
 
 exit 0

@@ -54,3 +54,18 @@ This session has the Infinite Leverage plugin loaded. An 8-agent specialist team
 If you haven't set up the 8-agent team yet, run `/infiniteleverage-init`.
 If you're onboarding a new project, run `/infiniteleverage-onboard`.
 If the template has a newer version, run `/infiniteleverage-patch`.
+
+## What this plugin does
+
+On every session start, `hooks/session-start` runs four stages:
+1. **Init check** — detects whether the 8 agents are installed; prompts `/infiniteleverage-init` if not
+2. **Version check** — compares local template version against canonical GitHub repo; surfaces patch advisory if behind
+3. **Context injection** — agent routing rules are injected via this CLAUDE.md (always active)
+4. **Usage awareness** — injects a compact token-usage briefing into Claude's context
+
+## Source of truth
+
+All agent definitions and operational skills live in the canonical template repo:
+`https://github.com/talentedgeai/infiniteleverage-8-agents-template`
+
+This plugin repo is the **exposure layer only** — it contains setup skills and hooks. Never edit agent definitions here; edit in the template repo and run `/infiniteleverage-patch` to sync.
