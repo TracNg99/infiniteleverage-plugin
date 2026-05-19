@@ -7,7 +7,7 @@
 set -euo pipefail
 
 # --- Config ---
-IL_TEMPLATE_REPO_URL="https://raw.githubusercontent.com/TracNg99/infiniteleverage-8-agents-template/main/VERSION"
+IL_TEMPLATE_REPO_URL="https://raw.githubusercontent.com/talentedgeai/infiniteleverage-8-agents-template/main/VERSION"
 IL_AGENTS_DIR="${HOME}/.claude/agents"
 IL_VERSION_FILE="${HOME}/.claude/.infiniteleverage-version"
 EXPECTED_AGENTS=("designer.md" "developer.md" "devops.md" "email-marketer.md" "product-manager.md" "qa.md" "web-publisher.md" "writer.md")
