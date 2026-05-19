@@ -1,21 +1,24 @@
 {
-  "owner": "talentedgeai",
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "infiniteleverage",
+  "owner": {
+    "name": "Edge8",
+    "email": "trac.nguyen@edge8.ai"
+  },
+  "metadata": {
+    "description": "Infinite Leverage 8-agent system for Claude Desktop Team",
+    "homepage": "https://github.com/talentedgeai/infiniteleverage-8-agents-template"
+  },
   "plugins": [
     {
       "name": "infiniteleverage",
-      "description": "Infinite Leverage 8-agent system for Claude Desktop Team. Provides agent routing, version tracking, and setup skills (init, onboard, patch) for the full PM + Developer + QA + DevOps + Writer + Designer + Publisher + Email Marketer team.",
+      "source": "./plugin",
+      "description": "8-agent specialist team with routing hooks, version tracking, and setup skills for PM, Developer, QA, DevOps, Writer, Designer, Publisher, and Email Marketer.",
       "version": "1.0.0",
       "author": {
         "name": "Edge8",
-        "email": "trac.nguyen@edge8.ai",
-        "url": "https://github.com/talentedgeai"
-      },
-      "repository": "https://github.com/talentedgeai/infiniteleverage-8-plugin",
-      "homepage": "https://github.com/talentedgeai/infiniteleverage-8-agents-template",
-      "license": "MIT",
-      "keywords": ["agents", "team", "routing", "infinite-leverage", "product-manager", "developer", "qa", "devops"],
-      "hooks": "./hooks/hooks.json",
-      "skills": "./skills/"
+        "email": "trac.nguyen@edge8.ai"
+      }
     }
   ]
 }
