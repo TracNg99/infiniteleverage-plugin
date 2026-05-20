@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # SessionStart hook for Infinite Leverage plugin.
 # Stage 1: detect if 8-agent team is initialized.
-# Stage 2: auto-update agents and skills from template repo when a newer version exists.
+# Stage 2: auto-update agents and skills from latest GitHub Release when behind.
 # Stage 3: silent pass (routing context is in CLAUDE.md, not re-injected here).
 # Stage 4: inject compact token-usage briefing via usage-context.py.
 
 set -euo pipefail
 
 # --- Config ---
+IL_RELEASES_API="https://api.github.com/repos/talentedgeai/infiniteleverage-8-agents-template/releases/latest"
 IL_TEMPLATE_REPO="https://github.com/talentedgeai/infiniteleverage-8-agents-template.git"
-IL_TEMPLATE_VERSION_URL="https://raw.githubusercontent.com/talentedgeai/infiniteleverage-8-agents-template/main/VERSION"
 IL_AGENTS_DIR="${HOME}/.claude/agents"
 IL_SKILLS_DIR="${HOME}/.claude/skills"
 IL_VERSION_FILE="${HOME}/.claude/.infiniteleverage-version"
@@ -54,26 +54,34 @@ Run **/infiniteleverage-init** to set up your team (takes ~5 minutes)."
   exit 0
 fi
 
-# --- Stage 2: Auto-update agents and skills when a newer version exists ---
+# --- Stage 2: Auto-update from latest GitHub Release ---
 local_version=""
 if [[ -f "$IL_VERSION_FILE" ]]; then
   local_version="$(tr -d '[:space:]' < "$IL_VERSION_FILE")"
 fi
 
 if [[ -n "$local_version" ]]; then
-  remote_version=""
-  remote_version="$(curl --silent --max-time 5 "$IL_TEMPLATE_VERSION_URL" 2>/dev/null | tr -d '[:space:]')" || true
+  # Fetch latest release metadata from GitHub
+  release_json=""
+  release_json="$(curl --silent --max-time 5 \
+    -H "Accept: application/vnd.github.v3+json" \
+    "$IL_RELEASES_API" 2>/dev/null)" || true
+
+  remote_tag="$(echo "$release_json" | python3 -c \
+    "import sys,json; d=json.load(sys.stdin); print(d.get('tag_name',''))" 2>/dev/null || echo "")"
+  remote_version="${remote_tag#v}"  # strip leading 'v'
+  release_notes="$(echo "$release_json" | python3 -c \
+    "import sys,json; d=json.load(sys.stdin); print(d.get('body','').strip())" 2>/dev/null || echo "")"
 
   if [[ "$remote_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$remote_version" != "$local_version" ]]; then
-    # Attempt auto-update via git clone
+    # Attempt auto-update: clone at the exact release tag
     tmp_dir="$(mktemp -d)"
-    update_ok=false
 
-    if git clone --depth 1 --quiet "$IL_TEMPLATE_REPO" "$tmp_dir" 2>/dev/null; then
+    if git clone --depth 1 --branch "$remote_tag" --quiet "$IL_TEMPLATE_REPO" "$tmp_dir" 2>/dev/null; then
       # Update agents (all 8)
-      cp "$tmp_dir/.claude/agents/"*.md "${IL_AGENTS_DIR}/" 2>/dev/null && update_ok=true
+      cp "$tmp_dir/.claude/agents/"*.md "${IL_AGENTS_DIR}/" 2>/dev/null || true
 
-      # Update skills that are already installed locally (never install new ones)
+      # Update skills already installed locally (never install new ones without consent)
       if [[ -d "$tmp_dir/.claude/skills" && -d "$IL_SKILLS_DIR" ]]; then
         for skill_src in "$tmp_dir/.claude/skills"/*/; do
           skill_name="$(basename "$skill_src")"
@@ -87,15 +95,22 @@ if [[ -n "$local_version" ]]; then
       # Stamp new version
       echo "$remote_version" > "$IL_VERSION_FILE"
 
-      emit_context "# Infinite Leverage Auto-Updated ✓
+      # Build update notification with release notes if available
+      update_msg="# Infinite Leverage Auto-Updated
 
-Agents and skills updated **${local_version}** → **${remote_version}** automatically.
-All 8 agents now reflect the latest definitions from the canonical repo."
+Agents and skills updated **${local_version}** → **${remote_version}** automatically."
+      if [[ -n "$release_notes" ]]; then
+        update_msg="${update_msg}
+
+## What's new in ${remote_tag}
+${release_notes}"
+      fi
+      emit_context "$update_msg"
     else
-      # Clone failed — fall back to advisory
+      # Clone failed — advisory fallback
       emit_context "# Infinite Leverage Update Available
 
-Template **${remote_version}** is available (you have **${local_version}**).
+Release **${remote_tag}** is available (you have **${local_version}**).
 Run **/infiniteleverage-patch** to apply updates manually."
     fi
 
