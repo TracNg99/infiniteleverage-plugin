@@ -1,4 +1,4 @@
-# infiniteleverage-plugin
+# infiniteleverage-8-plugin
 
 > **Staging area** — extract this directory into its own repo (`infiniteleverage-plugin`) before publishing.
 
