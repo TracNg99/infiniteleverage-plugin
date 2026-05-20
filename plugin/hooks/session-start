@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # SessionStart hook for Infinite Leverage plugin.
 # Stage 1: detect if 8-agent team is initialized.
-# Stage 2: check if template version is current.
+# Stage 2: auto-update agents and skills from template repo when a newer version exists.
 # Stage 3: silent pass (routing context is in CLAUDE.md, not re-injected here).
 # Stage 4: inject compact token-usage briefing via usage-context.py.
 
 set -euo pipefail
 
 # --- Config ---
-IL_TEMPLATE_REPO_URL="https://raw.githubusercontent.com/talentedgeai/infiniteleverage-8-agents-template/main/VERSION"
+IL_TEMPLATE_REPO="https://github.com/talentedgeai/infiniteleverage-8-agents-template.git"
+IL_TEMPLATE_VERSION_URL="https://raw.githubusercontent.com/talentedgeai/infiniteleverage-8-agents-template/main/VERSION"
 IL_AGENTS_DIR="${HOME}/.claude/agents"
+IL_SKILLS_DIR="${HOME}/.claude/skills"
 IL_VERSION_FILE="${HOME}/.claude/.infiniteleverage-version"
 EXPECTED_AGENTS=("designer.md" "developer.md" "devops.md" "email-marketer.md" "product-manager.md" "qa.md" "web-publisher.md" "writer.md")
 
@@ -52,8 +54,7 @@ Run **/infiniteleverage-init** to set up your team (takes ~5 minutes)."
   exit 0
 fi
 
-# --- Stage 2: Version check (silent on network failure) ---
-advisory=""
+# --- Stage 2: Auto-update agents and skills when a newer version exists ---
 local_version=""
 if [[ -f "$IL_VERSION_FILE" ]]; then
   local_version="$(tr -d '[:space:]' < "$IL_VERSION_FILE")"
@@ -61,18 +62,45 @@ fi
 
 if [[ -n "$local_version" ]]; then
   remote_version=""
-  remote_version="$(curl --silent --max-time 3 "$IL_TEMPLATE_REPO_URL" 2>/dev/null | tr -d '[:space:]')" || true
+  remote_version="$(curl --silent --max-time 5 "$IL_TEMPLATE_VERSION_URL" 2>/dev/null | tr -d '[:space:]')" || true
 
   if [[ "$remote_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$remote_version" != "$local_version" ]]; then
-    advisory="# Infinite Leverage Update Available
+    # Attempt auto-update via git clone
+    tmp_dir="$(mktemp -d)"
+    update_ok=false
+
+    if git clone --depth 1 --quiet "$IL_TEMPLATE_REPO" "$tmp_dir" 2>/dev/null; then
+      # Update agents (all 8)
+      cp "$tmp_dir/.claude/agents/"*.md "${IL_AGENTS_DIR}/" 2>/dev/null && update_ok=true
+
+      # Update skills that are already installed locally (never install new ones)
+      if [[ -d "$tmp_dir/.claude/skills" && -d "$IL_SKILLS_DIR" ]]; then
+        for skill_src in "$tmp_dir/.claude/skills"/*/; do
+          skill_name="$(basename "$skill_src")"
+          skill_dest="${IL_SKILLS_DIR}/${skill_name}"
+          if [[ -d "$skill_dest" ]]; then
+            cp -r "$skill_src/." "$skill_dest/" 2>/dev/null || true
+          fi
+        done
+      fi
+
+      # Stamp new version
+      echo "$remote_version" > "$IL_VERSION_FILE"
+
+      emit_context "# Infinite Leverage Auto-Updated ✓
+
+Agents and skills updated **${local_version}** → **${remote_version}** automatically.
+All 8 agents now reflect the latest definitions from the canonical repo."
+    else
+      # Clone failed — fall back to advisory
+      emit_context "# Infinite Leverage Update Available
 
 Template **${remote_version}** is available (you have **${local_version}**).
-Run **/infiniteleverage-patch** to apply updates."
-  fi
-fi
+Run **/infiniteleverage-patch** to apply updates manually."
+    fi
 
-if [[ -n "$advisory" ]]; then
-  emit_context "$advisory"
+    rm -rf "$tmp_dir" 2>/dev/null || true
+  fi
 fi
 
 # --- Stage 4: Usage awareness (silent on failure) ---
