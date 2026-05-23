@@ -1,21 +1,31 @@
 #!/usr/bin/env bash
-# SessionStart hook for Infinite Leverage plugin.
-# Stage 1: detect if 8-agent team is initialized.
-# Stage 2: auto-update agents and skills from latest GitHub Release when behind.
-# Stage 3: silent pass (routing context is in CLAUDE.md, not re-injected here).
-# Stage 4: inject compact token-usage briefing via usage-context.py.
+# SessionStart hook — Infinite Leverage plugin
+# Runs on every session start. Never blocks the session.
+#
+# Every session it:
+#   1. Scans the machine for missing agents, hook scripts, and settings entries
+#   2. Compares local version against latest template release
+#   3. If anything is missing OR version is behind → clones template and syncs
+#   4. Wires hook entries into settings.local.json (requires one restart to activate)
+#   5. Injects compact token-usage briefing
 
 set -euo pipefail
 
-# --- Config ---
+# ── Config ────────────────────────────────────────────────────────────────────
 IL_RELEASES_API="https://api.github.com/repos/talentedgeai/infiniteleverage-8-agents-template/releases/latest"
 IL_TEMPLATE_REPO="https://github.com/talentedgeai/infiniteleverage-8-agents-template.git"
 IL_AGENTS_DIR="${HOME}/.claude/agents"
 IL_SKILLS_DIR="${HOME}/.claude/skills"
+IL_HOOKS_DIR="${HOME}/.claude/hooks"
+IL_SETTINGS="${HOME}/.claude/settings.local.json"
 IL_VERSION_FILE="${HOME}/.claude/.infiniteleverage-version"
-EXPECTED_AGENTS=("designer.md" "developer.md" "devops.md" "email-marketer.md" "product-manager.md" "qa.md" "web-publisher.md" "writer.md")
+EXPECTED_AGENTS=(
+  "designer.md" "developer.md" "devops.md" "email-marketer.md"
+  "product-manager.md" "qa.md" "web-publisher.md" "writer.md"
+)
+EXPECTED_HOOK_SCRIPTS=("pre-bash" "prompt-submit")
 
-# --- Helpers ---
+# ── Helpers ───────────────────────────────────────────────────────────────────
 escape_for_json() {
   local s="$1"
   s="${s//\\/\\\\}"
@@ -37,94 +47,185 @@ emit_context() {
   fi
 }
 
-# --- Stage 1: Initialization check ---
-initialized=true
+# Returns 0 if both hook entries are already wired in settings.local.json
+hooks_wired() {
+  python3 - "$IL_SETTINGS" <<'PYEOF' 2>/dev/null
+import sys, json, os
+path = sys.argv[1]
+if not os.path.exists(path):
+    sys.exit(1)
+with open(path) as f:
+    try: d = json.load(f)
+    except: sys.exit(1)
+hooks = d.get("hooks", {})
+has_pre = any(
+    any("pre-bash" in h.get("command", "") for h in e.get("hooks", []))
+    for e in hooks.get("PreToolUse", [])
+)
+has_submit = any(
+    any("prompt-submit" in h.get("command", "") for h in e.get("hooks", []))
+    for e in hooks.get("UserPromptSubmit", [])
+)
+sys.exit(0 if (has_pre and has_submit) else 1)
+PYEOF
+}
+
+# Idempotently writes PreToolUse and UserPromptSubmit entries to settings.local.json
+wire_hooks() {
+  python3 - "$IL_SETTINGS" "$IL_HOOKS_DIR" <<'PYEOF' 2>/dev/null
+import sys, json, os
+settings_path, hooks_dir = sys.argv[1], sys.argv[2]
+settings = {}
+if os.path.exists(settings_path):
+    with open(settings_path) as f:
+        try: settings = json.load(f)
+        except: pass
+hooks_cfg = settings.setdefault("hooks", {})
+HOOK_DEFS = [
+    ("PreToolUse",       "pre-bash",      "Bash"),
+    ("UserPromptSubmit", "prompt-submit", ""),
+]
+for event, filename, matcher in HOOK_DEFS:
+    hook_path = os.path.join(hooks_dir, filename)
+    if not os.path.exists(hook_path):
+        continue
+    already = any(
+        any(h.get("command") == hook_path for h in e.get("hooks", []))
+        for e in hooks_cfg.get(event, [])
+    )
+    if not already:
+        hooks_cfg.setdefault(event, []).append({
+            "matcher": matcher,
+            "hooks": [{"type": "command", "command": hook_path}]
+        })
+os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+with open(settings_path, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+PYEOF
+}
+
+# ── Scan: what's missing or out of date? ──────────────────────────────────────
+missing_agents=false
+missing_hook_scripts=false
+
 for agent in "${EXPECTED_AGENTS[@]}"; do
-  if [[ ! -f "${IL_AGENTS_DIR}/${agent}" ]]; then
-    initialized=false
-    break
-  fi
+  [[ ! -f "${IL_AGENTS_DIR}/${agent}" ]] && missing_agents=true && break
 done
 
-if [[ "$initialized" == "false" ]]; then
-  emit_context "# Infinite Leverage Plugin Active
+mkdir -p "$IL_HOOKS_DIR"
+for hook in "${EXPECTED_HOOK_SCRIPTS[@]}"; do
+  [[ ! -f "${IL_HOOKS_DIR}/${hook}" ]] && missing_hook_scripts=true && break
+done
 
-Your 8-agent team is not configured yet.
-Run **/infiniteleverage-init** to set up your team (takes ~5 minutes)."
-  exit 0
-fi
-
-# --- Stage 2: Auto-update from latest GitHub Release ---
 local_version=""
-if [[ -f "$IL_VERSION_FILE" ]]; then
-  local_version="$(tr -d '[:space:]' < "$IL_VERSION_FILE")"
+[[ -f "$IL_VERSION_FILE" ]] && local_version="$(tr -d '[:space:]' < "$IL_VERSION_FILE")"
+
+# ── Fetch latest release info (single API call) ───────────────────────────────
+release_json=""
+release_json="$(curl --silent --max-time 5 \
+  -H "Accept: application/vnd.github.v3+json" \
+  "$IL_RELEASES_API" 2>/dev/null)" || true
+
+remote_tag="$(echo "$release_json" | python3 -c \
+  "import sys,json; d=json.load(sys.stdin); print(d.get('tag_name',''))" 2>/dev/null || echo "")"
+remote_version="${remote_tag#v}"
+release_notes="$(echo "$release_json" | python3 -c \
+  "import sys,json; d=json.load(sys.stdin); print(d.get('body','').strip())" 2>/dev/null || echo "")"
+
+# ── Decide if a sync is needed ────────────────────────────────────────────────
+version_behind=false
+if [[ "$remote_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && -n "$local_version" \
+      && "$remote_version" != "$local_version" ]]; then
+  version_behind=true
 fi
 
-if [[ -n "$local_version" ]]; then
-  # Fetch latest release metadata from GitHub
-  release_json=""
-  release_json="$(curl --silent --max-time 5 \
-    -H "Accept: application/vnd.github.v3+json" \
-    "$IL_RELEASES_API" 2>/dev/null)" || true
+needs_sync=false
+[[ "$missing_agents" == "true" ]]       && needs_sync=true
+[[ "$missing_hook_scripts" == "true" ]] && needs_sync=true
+[[ "$version_behind" == "true" ]]       && needs_sync=true
 
-  remote_tag="$(echo "$release_json" | python3 -c \
-    "import sys,json; d=json.load(sys.stdin); print(d.get('tag_name',''))" 2>/dev/null || echo "")"
-  remote_version="${remote_tag#v}"  # strip leading 'v'
-  release_notes="$(echo "$release_json" | python3 -c \
-    "import sys,json; d=json.load(sys.stdin); print(d.get('body','').strip())" 2>/dev/null || echo "")"
+# ── Sync: clone template and install/update everything ────────────────────────
+if [[ "$needs_sync" == "true" ]]; then
+  tmp_dir="$(mktemp -d)"
+  cloned=false
 
-  if [[ "$remote_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$remote_version" != "$local_version" ]]; then
-    # Attempt auto-update: clone at the exact release tag
-    tmp_dir="$(mktemp -d)"
+  clone_args=(--depth 1 --quiet)
+  [[ -n "$remote_tag" ]] && clone_args+=(--branch "$remote_tag")
 
-    if git clone --depth 1 --branch "$remote_tag" --quiet "$IL_TEMPLATE_REPO" "$tmp_dir" 2>/dev/null; then
-      # Update agents (all 8)
-      cp "$tmp_dir/.claude/agents/"*.md "${IL_AGENTS_DIR}/" 2>/dev/null || true
+  git clone "${clone_args[@]}" "$IL_TEMPLATE_REPO" "$tmp_dir" 2>/dev/null \
+    && cloned=true || true
 
-      # Update skills already installed locally (never install new ones without consent)
-      if [[ -d "$tmp_dir/.claude/skills" && -d "$IL_SKILLS_DIR" ]]; then
-        for skill_src in "$tmp_dir/.claude/skills"/*/; do
-          skill_name="$(basename "$skill_src")"
-          skill_dest="${IL_SKILLS_DIR}/${skill_name}"
-          if [[ -d "$skill_dest" ]]; then
-            cp -r "$skill_src/." "$skill_dest/" 2>/dev/null || true
-          fi
-        done
-      fi
+  if [[ "$cloned" == "true" ]]; then
+    # Agents — always refresh all 8
+    mkdir -p "$IL_AGENTS_DIR"
+    cp "$tmp_dir/.claude/agents/"*.md "$IL_AGENTS_DIR/" 2>/dev/null || true
 
-      # Stamp new version
-      echo "$remote_version" > "$IL_VERSION_FILE"
+    # Hook scripts — install or overwrite
+    for hook in "${EXPECTED_HOOK_SCRIPTS[@]}"; do
+      src="$tmp_dir/hooks/${hook}"
+      [[ -f "$src" ]] && cp "$src" "${IL_HOOKS_DIR}/${hook}" \
+        && chmod +x "${IL_HOOKS_DIR}/${hook}" 2>/dev/null || true
+    done
 
-      # Build update notification with release notes if available
-      update_msg="# Infinite Leverage Auto-Updated
-
-Agents and skills updated **${local_version}** → **${remote_version}** automatically."
-      if [[ -n "$release_notes" ]]; then
-        update_msg="${update_msg}
-
-## What's new in ${remote_tag}
-${release_notes}"
-      fi
-      emit_context "$update_msg"
-    else
-      # Clone failed — advisory fallback
-      emit_context "# Infinite Leverage Update Available
-
-Release **${remote_tag}** is available (you have **${local_version}**).
-Run **/infiniteleverage-patch** to apply updates manually."
+    # Skills — update only what's already installed (never install new ones)
+    if [[ -d "$tmp_dir/.claude/skills" && -d "$IL_SKILLS_DIR" ]]; then
+      for skill_src in "$tmp_dir/.claude/skills"/*/; do
+        skill_name="$(basename "$skill_src")"
+        skill_dest="${IL_SKILLS_DIR}/${skill_name}"
+        [[ -d "$skill_dest" ]] && cp -r "$skill_src/." "$skill_dest/" 2>/dev/null || true
+      done
     fi
 
-    rm -rf "$tmp_dir" 2>/dev/null || true
+    # Stamp version
+    [[ -n "$remote_version" ]] && echo "$remote_version" > "$IL_VERSION_FILE"
+
+    # Emit sync result
+    if [[ "$missing_agents" == "true" || "$missing_hook_scripts" == "true" ]]; then
+      sync_msg="# Infinite Leverage — First-Time Setup Complete ✓
+
+Agents and hook scripts installed automatically from **${remote_tag:-latest}**."
+    else
+      sync_msg="# Infinite Leverage — Updated: ${local_version} → ${remote_version}"
+      [[ -n "$release_notes" ]] && sync_msg="${sync_msg}
+
+${release_notes}"
+    fi
+    emit_context "$sync_msg"
+
+  else
+    # Clone failed — only block if this is truly first-time (no agents at all)
+    if [[ "$missing_agents" == "true" ]]; then
+      emit_context "# Infinite Leverage — Setup Required
+
+Could not reach GitHub to install the 8-agent team automatically.
+Check your internet connection, then run **/infiniteleverage-init** to set up manually."
+      exit 0
+    fi
+    # Otherwise (version behind but no connectivity) — silent, non-blocking
   fi
+
+  rm -rf "$tmp_dir" 2>/dev/null || true
 fi
 
-# --- Stage 4: Usage awareness (silent on failure) ---
+# ── Wire settings.local.json (idempotent, no restart needed if already wired) ─
+restart_needed=false
+if ! hooks_wired 2>/dev/null; then
+  wire_hooks && restart_needed=true || true
+fi
+
+if [[ "$restart_needed" == "true" ]]; then
+  emit_context "# Infinite Leverage — Restart Required
+
+Hook entries written to \`settings.local.json\`.
+**Restart Claude Code once** to activate the agent routing and guardrail hooks."
+fi
+
+# ── Usage awareness (silent on failure) ───────────────────────────────────────
 USAGE_SCRIPT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}/hooks/usage-context.py"
 if [[ -f "$USAGE_SCRIPT" ]]; then
   usage_line="$(python3 "$USAGE_SCRIPT" 2>/dev/null)" || true
-  if [[ -n "$usage_line" ]]; then
-    emit_context "$usage_line"
-  fi
+  [[ -n "$usage_line" ]] && emit_context "$usage_line"
 fi
 
 exit 0
