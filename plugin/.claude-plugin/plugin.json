@@ -9,5 +9,7 @@
   "repository": "https://github.com/talentedgeai/infiniteleverage-8-plugin",
   "homepage": "https://github.com/talentedgeai/infiniteleverage-8-agents-template",
   "license": "MIT",
-  "keywords": ["agents", "team", "routing", "infinite-leverage", "product-manager", "developer", "qa", "devops"]
+  "keywords": ["agents", "team", "routing", "infinite-leverage", "product-manager", "developer", "qa", "devops"],
+  "hooks": "./hooks/hooks.json",
+  "skills": "./skills/"
 }
