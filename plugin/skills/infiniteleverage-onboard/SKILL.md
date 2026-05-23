@@ -44,6 +44,26 @@ rm -rf /tmp/il-agents
 
 ---
 
+## Settings Safety Protocol
+
+Before writing any configuration file — `settings.local.json`, `CLAUDE.md`, `global-engineering.md`, `.env` — check what's already there and follow these three rules:
+
+| Scenario | Action |
+|---|---|
+| File exists with compatible content (e.g. `settings.local.json` with different permissions, `CLAUDE.md` with custom sections already present) | **Merge** — add what's missing without removing what's already there |
+| File exists and is a complete previous version of this template | **Upgrade** — replace the whole file with the latest version |
+| File exists with content that conflicts with the template's intended pattern | **Try to resolve** — preserve the user's value and intent while satisfying the template requirement. If you can't resolve cleanly without losing something, ask the user before touching the file |
+
+**When asking about a conflict, use plain language — no JSON keys, no file paths, no technical jargon:**
+- Say what the setting *does*, not what it's called
+- Offer a simple choice: keep theirs, use the template's, or combine both
+
+> **Example:** "Your Claude Code is already set to ask permission before running shell commands. The team setup works best with shell commands allowed automatically. Would you like to switch to automatic, keep the ask-first behaviour, or handle them separately?"
+
+> **Example:** "You already have a global Claude instruction file with some notes in it. We'd like to add the 8-agent team routing table. Should we add it at the end, or would you like to look at the additions first?"
+
+---
+
 ## Smart Start — Find Out Where You Are
 
 Already started this and not sure where you left off? Run this first in Claude Code (or Claude chat):
@@ -95,7 +115,7 @@ PHASE 2 — Claude Code (automated)
   ├── [P3] Global rules: ~/.claude/rules/global-engineering.md
   ├── Credentials: ~/.claude/.env with all API keys
   ├── [P7] Supabase MCP: configure in settings.local.json + verify auth against SUPABASE_URL + SERVICE_ROLE_KEY
-  ├── [P11] Global skills: daily-checkin, create-local-routine
+  ├── [P11] Global skills: daily-checkin, create-local-routine, create-remote-routine
   ├── [P13] Agent templates: fetch from GitHub canonical repo (fallback: bundled `agents/`)
   ├── [P13][P1] Agent install: copy all 8 to `~/.claude/agents/`
   ├── Test: all 8 agents respond in Claude Code
@@ -199,7 +219,7 @@ Stopped partway through? Here's exactly where to pick up.
 - [ ] `~/.claude/rules/global-engineering.md` written
 - [ ] `~/.claude/.env` written with all API keys
 - [ ] Supabase MCP configured and authenticated **[P7]**
-- [ ] Global skills: `daily-checkin`, `create-local-routine` **[P11]**
+- [ ] Global skills: `daily-checkin`, `create-local-routine`, `create-remote-routine` **[P11]**
 - [ ] All 8 agents fetched from GitHub canonical repo to `~/.claude/agents/` **[P13]**
 - [ ] All 8 agents tested and responding
 - [ ] `email-index.md` verified — Stage 0 populated

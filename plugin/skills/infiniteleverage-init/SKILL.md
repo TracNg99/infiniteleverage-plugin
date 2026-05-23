@@ -13,6 +13,26 @@ This setup is built on the **Infinite Leverage 18 Protocols** — the principles
 
 ---
 
+## Settings Safety Protocol
+
+Before writing any configuration file — `settings.local.json`, `CLAUDE.md`, `global-engineering.md`, `.env` — check what's already there and follow these three rules:
+
+| Scenario | Action |
+|---|---|
+| File exists with compatible content (e.g. `settings.local.json` with different permissions, `CLAUDE.md` with custom sections already present) | **Merge** — add what's missing without removing what's already there |
+| File exists and is a complete previous version of this template | **Upgrade** — replace the whole file with the latest version |
+| File exists with content that conflicts with the template's intended pattern | **Try to resolve** — preserve the user's value and intent while satisfying the template requirement. If you can't resolve cleanly without losing something, ask the user before touching the file |
+
+**When asking about a conflict, use plain language — no JSON keys, no file paths, no technical jargon:**
+- Say what the setting *does*, not what it's called
+- Offer a simple choice: keep theirs, use the template's, or combine both
+
+> **Example:** "Your Claude Code is already set to ask permission before running shell commands. The team setup works best with shell commands allowed automatically. Would you like to switch to automatic, keep the ask-first behaviour, or handle them separately?"
+
+> **Example:** "You already have a global Claude instruction file with some notes in it. We'd like to add the 8-agent team routing table. Should we add it at the end, or would you like to look at the additions first?"
+
+---
+
 ## Smart Start — Find Out Where You Are
 
 Not sure if you've already done some of this? Don't guess. Run this first in Claude Code (or Claude chat):
@@ -210,7 +230,7 @@ Stopped partway through? Here's where to pick up — no restarting needed.
 - [ ] Project scaffolded at `~/code-projects/{project-slug}/` with context folders + `website/` **[P4]**
 - [ ] `.specify/` initialized in project root (done by `infiniteleverage-project` Step 8.5 — verify with `ls .specify/`)
 - [ ] `.env.local` written with all credentials (inside `website/`)
-- [ ] Global skills: `daily-checkin`, `create-local-routine`, `create-agent`, `infiniteleverage-help` **[P11]**
+- [ ] Global skills: `daily-checkin`, `create-local-routine`, `create-remote-routine`, `create-agent`, `infiniteleverage-help` **[P11]**
 - [ ] GitHub repo created, pushed, Vercel project imported (Root Directory=website set in dashboard) **[P5][P6]**
 - [ ] `vercel link` run, env vars added via `vercel env`, deployment verified (`vercel ls`)
 - [ ] Site live on Vercel (HTTP 200)
@@ -255,6 +275,23 @@ This adds `talentedgeai/infiniteleverage-plugin` to `~/.claude/settings.json` as
 - Token usage awareness at session start
 
 If `claude plugin` is not yet available, the user is on an older Claude Code version — run `npm i -g @anthropic-ai/claude-code@latest` to upgrade first.
+
+### Partner check — install whitelabel skill if eligible
+
+Run silently after plugin registration. No output on failure — this is invisible to non-partners.
+
+```bash
+if gh repo view talentedgeai/infiniteleverage-partner-portal --json name > /dev/null 2>&1; then
+  echo "✓ Partner access confirmed — installing whitelabel skill"
+  mkdir -p ~/.claude/skills/infiniteleverage-whitelabel
+  gh api repos/talentedgeai/infiniteleverage-partner-portal/contents/setup-skills/infiniteleverage-whitelabel/SKILL.md \
+    --jq '.content' | base64 --decode \
+    > ~/.claude/skills/infiniteleverage-whitelabel/SKILL.md
+  echo "  Whitelabel skill installed → /infiniteleverage-whitelabel"
+fi
+```
+
+Partners will see `/infiniteleverage-whitelabel` available in every future session. Non-partners: silent skip.
 
 ---
 
