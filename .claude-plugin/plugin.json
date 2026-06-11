@@ -1,7 +1,7 @@
 {
   "name": "infiniteleverage",
   "description": "Infinite Leverage 8-agent system for Claude Desktop Team. Provides agent routing, version tracking, and setup skills (init, onboard, patch) for the full PM + Developer + QA + DevOps + Writer + Designer + Publisher + Email Marketer team.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": {
     "name": "Edge8",
     "email": "trac.nguyen@edge8.ai",
