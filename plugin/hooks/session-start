@@ -1,231 +1,92 @@
 #!/usr/bin/env bash
-# SessionStart hook — Infinite Leverage plugin
-# Runs on every session start. Never blocks the session.
+# Infinite Leverage — SessionStart hook (plugin repo edition)
+# Four stages, all silent on pass. Never blocks the session.
 #
-# Every session it:
-#   1. Scans the machine for missing agents, hook scripts, and settings entries
-#   2. Compares local version against latest template release
-#   3. If anything is missing OR version is behind → clones template and syncs
-#   4. Wires hook entries into settings.local.json (requires one restart to activate)
-#   5. Injects compact token-usage briefing
+# Stage 1  — initialization check (agents present?)
+# Stage 2  — version check (template update available?)
+# Stage 3  — context injection (routing rules)
+# Stage 4  — usage awareness (token briefing into Claude's context)
 
-set -euo pipefail
+# ── Stage 1: Initialization check ────────────────────────────────────────────
+AGENTS_DIR="$HOME/.claude/agents"
+if [ ! -d "$AGENTS_DIR" ] || [ -z "$(ls -A "$AGENTS_DIR" 2>/dev/null)" ]; then
+    echo "[Infinite Leverage] Agents not found. Run /infiniteleverage-init to set up your 8-agent team."
+fi
 
-# ── Config ────────────────────────────────────────────────────────────────────
-IL_RELEASES_API="https://api.github.com/repos/talentedgeai/infiniteleverage-8-agents-template/releases/latest"
-IL_TEMPLATE_REPO="https://github.com/talentedgeai/infiniteleverage-8-agents-template.git"
-IL_AGENTS_DIR="${HOME}/.claude/agents"
-IL_SKILLS_DIR="${HOME}/.claude/skills"
-IL_HOOKS_DIR="${HOME}/.claude/hooks"
-IL_SETTINGS="${HOME}/.claude/settings.local.json"
-IL_VERSION_FILE="${HOME}/.claude/.infiniteleverage-version"
-EXPECTED_AGENTS=(
-  "designer.md" "developer.md" "devops.md" "email-marketer.md"
-  "product-manager.md" "qa.md" "web-publisher.md" "writer.md"
-)
-EXPECTED_HOOK_SCRIPTS=("pre-bash" "prompt-submit")
+# ── Stage 2: Version check ───────────────────────────────────────────────────
+# IL_TEMPLATE_REPO_URL is the raw VERSION file URL for the canonical template repo.
+# Update this constant when the org/repo slug changes.
+IL_TEMPLATE_REPO_URL="https://raw.githubusercontent.com/talentedgeai/infiniteleverage-8-agents-template/main/VERSION"
+LOCAL_VERSION_FILE="$HOME/.claude/.infiniteleverage-version"
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-escape_for_json() {
-  local s="$1"
-  s="${s//\\/\\\\}"
-  s="${s//\"/\\\"}"
-  s="${s//$'\n'/\\n}"
-  s="${s//$'\r'/\\r}"
-  s="${s//$'\t'/\\t}"
-  printf '%s' "$s"
-}
+if [ -f "$LOCAL_VERSION_FILE" ]; then
+    LOCAL_VERSION=$(cat "$LOCAL_VERSION_FILE" 2>/dev/null | tr -d '[:space:]')
+    REMOTE_VERSION=$(curl -sf --max-time 3 "$IL_TEMPLATE_REPO_URL" 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$REMOTE_VERSION" ] && [ "$REMOTE_VERSION" != "$LOCAL_VERSION" ]; then
+        echo "[Infinite Leverage] Template v${REMOTE_VERSION} available (you have v${LOCAL_VERSION}). Run /infiniteleverage-patch to update."
+    fi
+fi
+# Network failure or missing local version → silent pass. Never degrade the session.
 
-emit_context() {
-  local content="$1"
-  local escaped
-  escaped="$(escape_for_json "$content")"
-  if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -z "${COPILOT_CLI:-}" ]; then
-    printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "%s"\n  }\n}\n' "$escaped"
-  else
-    printf '{\n  "additionalContext": "%s"\n}\n' "$escaped"
-  fi
-}
+# ── Stage 3: Context injection ───────────────────────────────────────────────
+# Agent routing rules are injected via CLAUDE.md (written during init).
+# This stage is a no-op when the project CLAUDE.md contains the AGENT-DELEGATION block.
+# If CLAUDE.md is absent, emit a brief routing summary so agents still route correctly.
+if [ ! -f "CLAUDE.md" ] && [ ! -f "$HOME/.claude/CLAUDE.md" ]; then
+    echo "[Infinite Leverage] No CLAUDE.md found. Agent routing is inactive. Run /infiniteleverage-init or add CLAUDE.md."
+fi
 
-# Returns 0 if both hook entries are already wired in settings.local.json
-hooks_wired() {
-  python3 - "$IL_SETTINGS" <<'PYEOF' 2>/dev/null
-import sys, json, os
-path = sys.argv[1]
-if not os.path.exists(path):
-    sys.exit(1)
-with open(path) as f:
-    try: d = json.load(f)
-    except: sys.exit(1)
-hooks = d.get("hooks", {})
-has_pre = any(
-    any("pre-bash" in h.get("command", "") for h in e.get("hooks", []))
-    for e in hooks.get("PreToolUse", [])
-)
-has_submit = any(
-    any("prompt-submit" in h.get("command", "") for h in e.get("hooks", []))
-    for e in hooks.get("UserPromptSubmit", [])
-)
-sys.exit(0 if (has_pre and has_submit) else 1)
-PYEOF
-}
+# ── Stage 4: Usage awareness ─────────────────────────────────────────────────
+python3 "$HOME/.claude/hooks/usage-context.py" 2>/dev/null || true
 
-# Idempotently writes PreToolUse and UserPromptSubmit entries to settings.local.json
-wire_hooks() {
-  python3 - "$IL_SETTINGS" "$IL_HOOKS_DIR" <<'PYEOF' 2>/dev/null
-import sys, json, os
-settings_path, hooks_dir = sys.argv[1], sys.argv[2]
-settings = {}
-if os.path.exists(settings_path):
-    with open(settings_path) as f:
-        try: settings = json.load(f)
-        except: pass
-hooks_cfg = settings.setdefault("hooks", {})
-HOOK_DEFS = [
-    ("PreToolUse",       "pre-bash",      "Bash"),
-    ("UserPromptSubmit", "prompt-submit", ""),
-]
-for event, filename, matcher in HOOK_DEFS:
-    hook_path = os.path.join(hooks_dir, filename)
-    if not os.path.exists(hook_path):
-        continue
-    already = any(
-        any(h.get("command") == hook_path for h in e.get("hooks", []))
-        for e in hooks_cfg.get(event, [])
+# ── Stage 5: Telemetry config guard ──────────────────────────────────────────
+# Warn once (never block) if Claude session telemetry can't be delivered:
+# no gh auth, or no git email to attribute the effort to.
+if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1 || [ -z "$(git config user.email 2>/dev/null)" ]; then
+    echo "[telemetry] not configured — effort not tracked; run /infiniteleverage-onboard"
+fi
+
+# ── Stage 5b: Registration notice ────────────────────────────────────────────
+# If inside a git repo with a remote origin, check whether this repo is
+# registered for effort tracking. Print a single line if not. Never blocks.
+_IL_TRACKER_URL="${IL_TRACKER_URL:-https://human-token-tracker.vercel.app}"
+_REPO_REMOTE=$(git config --get remote.origin.url 2>/dev/null || true)
+if [ -n "$_REPO_REMOTE" ] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    _REPO_FULL=$(python3 - <<'PY' 2>/dev/null
+import subprocess, sys
+raw = subprocess.run(["git","config","--get","remote.origin.url"],
+                    capture_output=True, text=True).stdout.strip()
+s = raw
+if s.endswith(".git"): s = s[:-4]
+if ":" in s and "//" not in s:
+    s = s.split(":",1)[1]
+else:
+    parts = s.split("//",1)[-1].split("/",1)
+    s = parts[1] if len(parts)>1 else parts[0]
+print(s.strip("/"))
+PY
     )
-    if not already:
-        hooks_cfg.setdefault(event, []).append({
-            "matcher": matcher,
-            "hooks": [{"type": "command", "command": hook_path}]
-        })
-os.makedirs(os.path.dirname(settings_path), exist_ok=True)
-with open(settings_path, "w") as f:
-    json.dump(settings, f, indent=2)
-    f.write("\n")
-PYEOF
-}
-
-# ── Scan: what's missing or out of date? ──────────────────────────────────────
-missing_agents=false
-missing_hook_scripts=false
-
-for agent in "${EXPECTED_AGENTS[@]}"; do
-  [[ ! -f "${IL_AGENTS_DIR}/${agent}" ]] && missing_agents=true && break
-done
-
-mkdir -p "$IL_HOOKS_DIR"
-for hook in "${EXPECTED_HOOK_SCRIPTS[@]}"; do
-  [[ ! -f "${IL_HOOKS_DIR}/${hook}" ]] && missing_hook_scripts=true && break
-done
-
-local_version=""
-[[ -f "$IL_VERSION_FILE" ]] && local_version="$(tr -d '[:space:]' < "$IL_VERSION_FILE")"
-
-# ── Fetch latest release info (single API call) ───────────────────────────────
-release_json=""
-release_json="$(curl --silent --max-time 5 \
-  -H "Accept: application/vnd.github.v3+json" \
-  "$IL_RELEASES_API" 2>/dev/null)" || true
-
-remote_tag="$(echo "$release_json" | python3 -c \
-  "import sys,json; d=json.load(sys.stdin); print(d.get('tag_name',''))" 2>/dev/null || echo "")"
-remote_version="${remote_tag#v}"
-release_notes="$(echo "$release_json" | python3 -c \
-  "import sys,json; d=json.load(sys.stdin); print(d.get('body','').strip())" 2>/dev/null || echo "")"
-
-# ── Decide if a sync is needed ────────────────────────────────────────────────
-version_behind=false
-if [[ "$remote_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && -n "$local_version" \
-      && "$remote_version" != "$local_version" ]]; then
-  version_behind=true
-fi
-
-needs_sync=false
-[[ "$missing_agents" == "true" ]]       && needs_sync=true
-[[ "$missing_hook_scripts" == "true" ]] && needs_sync=true
-[[ "$version_behind" == "true" ]]       && needs_sync=true
-
-# ── Sync: clone template and install/update everything ────────────────────────
-if [[ "$needs_sync" == "true" ]]; then
-  tmp_dir="$(mktemp -d)"
-  cloned=false
-
-  clone_args=(--depth 1 --quiet)
-  [[ -n "$remote_tag" ]] && clone_args+=(--branch "$remote_tag")
-
-  git clone "${clone_args[@]}" "$IL_TEMPLATE_REPO" "$tmp_dir" 2>/dev/null \
-    && cloned=true || true
-
-  if [[ "$cloned" == "true" ]]; then
-    # Agents — always refresh all 8
-    mkdir -p "$IL_AGENTS_DIR"
-    cp "$tmp_dir/.claude/agents/"*.md "$IL_AGENTS_DIR/" 2>/dev/null || true
-
-    # Hook scripts — install or overwrite
-    for hook in "${EXPECTED_HOOK_SCRIPTS[@]}"; do
-      src="$tmp_dir/hooks/${hook}"
-      [[ -f "$src" ]] && cp "$src" "${IL_HOOKS_DIR}/${hook}" \
-        && chmod +x "${IL_HOOKS_DIR}/${hook}" 2>/dev/null || true
-    done
-
-    # Skills — update only what's already installed (never install new ones)
-    if [[ -d "$tmp_dir/.claude/skills" && -d "$IL_SKILLS_DIR" ]]; then
-      for skill_src in "$tmp_dir/.claude/skills"/*/; do
-        skill_name="$(basename "$skill_src")"
-        skill_dest="${IL_SKILLS_DIR}/${skill_name}"
-        [[ -d "$skill_dest" ]] && cp -r "$skill_src/." "$skill_dest/" 2>/dev/null || true
-      done
+    if [ -n "$_REPO_FULL" ]; then
+        # Check local unregistered marker first (avoids network call)
+        _SAFE_MARKER=$(echo "$_REPO_FULL" | sed 's|/|__|g')
+        _MARKER_PATH="$HOME/.claude/.il-telemetry/unregistered/$_SAFE_MARKER"
+        if [ -f "$_MARKER_PATH" ]; then
+            : # already known unregistered — skip probe, no noise
+        else
+            _STATUS=$(python3 - "$_IL_TRACKER_URL" "$_REPO_FULL" <<'PY' 2>/dev/null
+import sys, urllib.request, urllib.error, json
+tracker, repo = sys.argv[1], sys.argv[2]
+try:
+    url = f"{tracker}/api/projects/status?repo={urllib.request.quote(repo, safe='/')}"
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent":"il-telemetry/1.0"}), timeout=5) as r:
+        print("registered" if json.loads(r.read()).get("registered") else "unregistered")
+except Exception:
+    print("unknown")
+PY
+            )
+            if [ "$_STATUS" = "unregistered" ]; then
+                echo "[Infinite Leverage] This repo isn't tracked yet — ask me to \"register this project for effort tracking\" (or say skip)."
+            fi
+        fi
     fi
-
-    # Stamp version
-    [[ -n "$remote_version" ]] && echo "$remote_version" > "$IL_VERSION_FILE"
-
-    # Emit sync result
-    if [[ "$missing_agents" == "true" || "$missing_hook_scripts" == "true" ]]; then
-      sync_msg="# Infinite Leverage — First-Time Setup Complete ✓
-
-Agents and hook scripts installed automatically from **${remote_tag:-latest}**."
-    else
-      sync_msg="# Infinite Leverage — Updated: ${local_version} → ${remote_version}"
-      [[ -n "$release_notes" ]] && sync_msg="${sync_msg}
-
-${release_notes}"
-    fi
-    emit_context "$sync_msg"
-
-  else
-    # Clone failed — only block if this is truly first-time (no agents at all)
-    if [[ "$missing_agents" == "true" ]]; then
-      emit_context "# Infinite Leverage — Setup Required
-
-Could not reach GitHub to install the 8-agent team automatically.
-Check your internet connection, then run **/infiniteleverage-init** to set up manually."
-      exit 0
-    fi
-    # Otherwise (version behind but no connectivity) — silent, non-blocking
-  fi
-
-  rm -rf "$tmp_dir" 2>/dev/null || true
 fi
-
-# ── Wire settings.local.json (idempotent, no restart needed if already wired) ─
-restart_needed=false
-if ! hooks_wired 2>/dev/null; then
-  wire_hooks && restart_needed=true || true
-fi
-
-if [[ "$restart_needed" == "true" ]]; then
-  emit_context "# Infinite Leverage — Restart Required
-
-Hook entries written to \`settings.local.json\`.
-**Restart Claude Code once** to activate the agent routing and guardrail hooks."
-fi
-
-# ── Usage awareness (silent on failure) ───────────────────────────────────────
-USAGE_SCRIPT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}/hooks/usage-context.py"
-if [[ -f "$USAGE_SCRIPT" ]]; then
-  usage_line="$(python3 "$USAGE_SCRIPT" 2>/dev/null)" || true
-  [[ -n "$usage_line" ]] && emit_context "$usage_line"
-fi
-
-exit 0
