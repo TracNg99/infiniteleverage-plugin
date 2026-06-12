@@ -94,11 +94,10 @@ Claude will scan your machine and give you a friendly "here's where you are" sum
 ```
 PHASE 1 — Claude Chat (manual)
   Prerequisites + quick win — client does this (Dave guides)
-  ├── [P3] Check/install: Chrome, Homebrew, git, gh, Node, supabase CLI, resend CLI
+  ├── [P3] Check/install: Chrome, Homebrew, git, gh, Node, resend CLI
   ├── [P5] Authenticate: GitHub CLI (browser OAuth)
   ├── Install: Claude Code Desktop (signed in with Claude Pro)
   ├── Install + authenticate: Claude Code CLI (required for automation)
-  ├── Install + authenticate: supabase CLI (`brew install supabase/tap/supabase`)
   ├── Install + authenticate: resend CLI (`npm install -g resend`)
   ├── [P6] Install + authenticate: Vercel CLI
   ├── Transfer: credentials file from Mac Mini (AirDrop or secure share)
@@ -108,13 +107,13 @@ PHASE 1 — Claude Chat (manual)
 
 PHASE 2 — Claude Code (automated)
   Machine config + agent install — Claude Code does all of this
-  ├── Check: all CLIs (gh, vercel, supabase, resend, claude) authenticated
+  ├── Check: all CLIs (gh, vercel, resend, claude) authenticated
   ├── [P3] Global dirs: ~/.claude/agents/, ~/.claude/skills/, ~/.claude/rules/
   ├── Permissions: ~/.claude/settings.local.json (Bash(*), acceptEdits, MCP)
   ├── Global CLAUDE.md: identity, agents pointer, content queue, schedule **[P9]**
   ├── [P3] Global rules: ~/.claude/rules/global-engineering.md
   ├── Credentials: ~/.claude/.env with all API keys
-  ├── [P7] Supabase MCP: configure in settings.local.json + verify auth against SUPABASE_URL + SERVICE_ROLE_KEY
+  ├── [P7] Supabase plugin (MCP): operator installs `plugin:supabase` via `/plugin` → Claude runs auth + verifies against SUPABASE_URL + SERVICE_ROLE_KEY
   ├── [P11] Global skills: daily-checkin, create-local-routine, create-remote-routine
   ├── [P13] Agent templates: fetch from GitHub canonical repo (fallback: bundled `agents/`)
   ├── [P13][P1] Agent install: copy all 8 to `~/.claude/agents/`
@@ -165,15 +164,114 @@ Open Claude Code Desktop in the project directory: click "Open Folder" → selec
 
 Run prompts from `references/phase2-prompts.md` in sequence. Each is self-contained.
 
-**The only manual step in Phase 2**: Supabase MCP OAuth. Claude outputs a URL → open in browser → Authorize → tell Claude "done". **[P7]**
+**The two manual steps in Phase 2**: installing the Supabase plugin and the OAuth click. Claude Code cannot install a plugin or authorize OAuth on its own, so it will pause and prompt you. (1) Run `/plugin` in Claude Code → marketplace → install **supabase** → restart if prompted. (2) Claude outputs an auth URL → open in browser → Authorize → tell Claude "done". **[P7]**
 
 **Phase 2 is complete when:**
 - `~/.claude/agents/` shows all 8 agents **[P13]**
 - All 8 agents respond when tested
 - `~/.claude/hooks/pre-bash` and `~/.claude/hooks/prompt-submit` installed and wired
 - Product Manager has been briefed on business context **[P14]**
+- Effort-tracking registration checked (registered or skipped with marker)
 
 See `references/phase2-prompts.md` for the full prompt sequence.
+
+### Phase 2 — Effort tracking registration (last step before wrap-up)
+
+After agents are installed and tested, register the cloned project repo for effort tracking.
+
+First confirm the repo's `owner/repo` slug (visible in the GitHub URL or via `gh repo view --json nameWithOwner --jq .nameWithOwner` from inside the project directory).
+
+Ask the operator:
+
+> Do you want to register `<owner>/<repo>` for effort tracking so this project appears in the dashboard? (y / skip)
+
+**If the operator says "skip":** write the local declined marker:
+
+```bash
+REPO_SLUG="<owner>__<repo>"   # substitute real values
+mkdir -p "$HOME/.claude/.il-telemetry/unregistered"
+touch "$HOME/.claude/.il-telemetry/unregistered/$REPO_SLUG"
+echo "Skipped. To register later, delete: ~/.claude/.il-telemetry/unregistered/$REPO_SLUG"
+```
+
+**If the operator says "y":** gather these details interactively:
+
+| Field | Question to ask |
+|---|---|
+| Type | "Is this a personal project or a client project?" → `personal` or `client` |
+| Display name | "What's the human-readable display name for this project?" |
+| *(client only)* Client name | "What is the client's company name?" |
+| *(client only)* Client initials | "Two-letter initials (e.g. E8)?" |
+| *(client only)* Is internal? | "Are you part of the client's organisation? (y/n)" |
+| *(client only)* Exclude identities | "Any git emails or GitHub logins belonging to the client's own team that should NOT count as AI-assisted? (one per line, blank to finish)" |
+
+Then commit the registration JSON to `talentedgeai/human-token-tracker` on the `telemetry` branch:
+
+```bash
+# Resolve owner/repo and GitHub login
+REPO_FULL="<owner>/<repo>"           # e.g. acmecorp/acme-bookstore
+GH_LOGIN=$(gh api user --jq '.login')
+PROJECT_DISPLAY="<Display Name>"
+
+# Build JSON (Claude assembles from the answers above)
+# Minimal personal example:
+REGISTRATION_JSON='{
+  "repo_full_name": "'"$REPO_FULL"'",
+  "github_login": "'"$GH_LOGIN"'",
+  "type": "personal",
+  "project_name": "'"$PROJECT_DISPLAY"'",
+  "client": { "name": "", "initials": "", "is_internal": true },
+  "exclude_identities": [],
+  "submitted_at": "'"$(date -u +%FT%TZ)"'"
+}'
+
+# Path on telemetry branch
+REG_PATH="registrations/$(echo "$REPO_FULL" | tr '/' '_' | sed 's|/|__|g').json"
+# Correct safe filename: owner__repo
+REG_PATH="registrations/$(echo "$REPO_FULL" | sed 's|/|__|g').json"
+
+# Check if file already exists (for sha on update)
+STATUS_RESP=$(gh api "repos/talentedgeai/human-token-tracker/contents/${REG_PATH}?ref=telemetry" 2>/dev/null || echo "")
+EXISTING_SHA=$(echo "$STATUS_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sha',''))" 2>/dev/null || echo "")
+ENCODED=$(echo "$REGISTRATION_JSON" | base64)
+
+# PUT to telemetry branch
+if [ -n "$EXISTING_SHA" ]; then
+  gh api -X PUT "repos/talentedgeai/human-token-tracker/contents/${REG_PATH}" \
+    -f "message=registration: $REPO_FULL" \
+    -f "content=$ENCODED" \
+    -f "branch=telemetry" \
+    -f "sha=$EXISTING_SHA"
+else
+  gh api -X PUT "repos/talentedgeai/human-token-tracker/contents/${REG_PATH}" \
+    -f "message=registration: $REPO_FULL" \
+    -f "content=$ENCODED" \
+    -f "branch=telemetry"
+fi
+```
+
+On success:
+```
+✅ Registration submitted → telemetry branch: registrations/<owner>__<repo>.json
+   The tracker applies it on its next ingest run (no DB credentials needed).
+   Effort records for this repo will appear in the dashboard once active.
+```
+
+On error: show the raw error output and tell the operator to retry this step. The rest of the onboarding is unaffected.
+
+### Validate effort tracking
+
+After the registration step, run these five checks and report each as **PASS** or **FAIL**:
+
+```bash
+gh auth status
+git config user.email
+git -C . remote get-url origin
+ls ~/.claude/hooks/il_telemetry >/dev/null 2>&1 && echo "telemetry hooks: OK" || echo "telemetry hooks: MISSING → update plugin + /infiniteleverage-patch"
+grep -q session-telemetry ~/.claude/settings.local.json && echo "registered: OK" || echo "registered: MISSING"
+```
+
+Report each line's result plainly: "PASS — gh authenticated as …", "FAIL — telemetry hooks: MISSING → update plugin + /infiniteleverage-patch", etc. If any check fails, note the remediation alongside it. The rest of the onboarding is not blocked by a FAIL here — record it and move on.
 
 ---
 
@@ -200,31 +298,31 @@ Stopped partway through? Here's exactly where to pick up.
 ### Phase 1 — Manual
 - [ ] Chrome installed
 - [ ] Homebrew installed and in PATH
-- [ ] git, gh CLI, Node, supabase CLI, resend CLI installed
+- [ ] git, gh CLI, Node, resend CLI installed
 - [ ] GitHub CLI authenticated as operator account **[P5]**
 - [ ] Claude Code Desktop installed and signed in
 - [ ] Claude Code CLI installed and authenticated
 - [ ] Vercel CLI installed and authenticated **[P6]**
-- [ ] supabase CLI installed and authenticated
 - [ ] resend CLI installed and authenticated
 - [ ] Credentials file transferred from Mac Mini (secure transfer — never email)
 - [ ] Live project cloned to `~/code-projects/{project-slug}/` **[P5]**
 - [ ] `npm run dev` runs successfully at `http://localhost:3000`
 
 ### Phase 2 — Claude Code
-- [ ] All CLIs authenticated: gh, vercel, supabase, resend, claude
+- [ ] All CLIs authenticated: gh, vercel, resend, claude
 - [ ] `~/.claude/agents/`, `~/.claude/skills/`, `~/.claude/rules/` created
 - [ ] `~/.claude/settings.local.json` with `Bash(*)` + `acceptEdits` + MCP permissions **[P3]**
 - [ ] `~/.claude/CLAUDE.md` written (matches Mac Mini)
 - [ ] `~/.claude/rules/global-engineering.md` written
 - [ ] `~/.claude/.env` written with all API keys
-- [ ] Supabase MCP configured and authenticated **[P7]**
+- [ ] Supabase plugin (`plugin:supabase`) installed via `/plugin` + MCP authenticated **[P7]**
 - [ ] Global skills: `daily-checkin`, `create-local-routine`, `create-remote-routine` **[P11]**
 - [ ] All 8 agents fetched from GitHub canonical repo to `~/.claude/agents/` **[P13]**
 - [ ] All 8 agents tested and responding
 - [ ] `email-index.md` verified — Stage 0 populated
 - [ ] Mac Mini scheduled work confirmed running **[P10]**
 - [ ] Product Manager briefed on business context **[P1][P14]**
+- [ ] Effort-tracking registration submitted or skipped (marker written if skipped)
 
 **Client is now operational. Point them to the first-actions guide in `references/first-actions.md`.**
 
