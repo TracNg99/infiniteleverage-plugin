@@ -1,34 +1,25 @@
-# infiniteleverage-8-plugin
+# infiniteleverage-plugin
 
-> **Staging area** — extract this directory into its own repo (`infiniteleverage-plugin`) before publishing.
+> ⚠️ **Superseded — frozen.** This repo (and the `infiniteleverage-8-plugin` mirror) is replaced by
+> the v2 plugin that ships directly from the canonical template repo:
+> **https://github.com/talentedgeai/infiniteleverage-8-agents-template**
+>
+> No new features land here. Only critical safety fixes are accepted until all installs
+> have migrated to v2, after which this repo will be archived.
 
-Claude Desktop Team plugin for the Infinite Leverage 8-agent system.
+## Why superseded
 
-## Extract to standalone repo
+This repo was a hand-copied snapshot of the template repo's `setup-skills/`, mirrored by CI to a
+third repo. The copies drifted (this repo still shipped skills deleted upstream), the mirror
+workflow never ran, and the plugin's `hooks.json` pointed at `~/.claude/hooks/*` instead of
+`${CLAUDE_PLUGIN_ROOT}` — so plugin updates never took effect without a manual copy step.
 
-```bash
-cp -r plugin-staging/ /path/to/infiniteleverage-plugin
-cd /path/to/infiniteleverage-plugin
-git init && git checkout -b main
+v2 collapses all of it into one repo that ships the plugin itself, with a bare-minimum payload
+(2 skills, 2 opt-in telemetry hooks, no global writes). See the cleanup plan in the template repo.
 
-# Populate skills/ from the template repo's setup-skills/
-cp -r /path/to/infiniteleverage-8-agents-template/setup-skills/infiniteleverage-init skills/
-cp -r /path/to/infiniteleverage-8-agents-template/setup-skills/infiniteleverage-onboard skills/
-cp -r /path/to/infiniteleverage-8-agents-template/setup-skills/infiniteleverage-patch skills/
-cp -r /path/to/infiniteleverage-8-agents-template/setup-skills/infiniteleverage-project skills/
+## Migration
 
-git add . && git commit -m "init: infiniteleverage-plugin"
-gh repo create talentedgeai/infiniteleverage-plugin --public --source=. --remote=origin --push
-```
-
-## Hook files
-
-| File | Purpose |
-|---|---|
-| `hooks/session-start` | 4-stage SessionStart hook (init check, version, routing, usage) |
-| `hooks/usage-context.py` | Token usage briefing injected into Claude's context |
-| `hooks/hooks.json` | Registers `session-start` as the SessionStart hook in settings.json |
-
-## Sync with template repo
-
-When `setup-skills/` in the template repo changes, rebuild the plugin's `skills/` directory by re-running the copy commands above and pushing a new plugin version.
+1. Remove this plugin/marketplace from your Claude Code settings.
+2. Add the template repo as the marketplace and install `infiniteleverage` v2.
+3. The v2 plugin's first session run cleans up residue that v1's `init`/`patch` copied into
+   `~/.claude/` (agents, skills, hooks, rules, the `Bash(*)` permission grant).
