@@ -17,20 +17,24 @@ if os.path.exists(path):
 perms = settings.setdefault("permissions", {})
 allow = perms.setdefault("allow", [])
 
+# Scoped permissions only. Never grant blanket Bash(*) or change defaultMode —
+# permission escalation is the operator's decision, not an installer's.
 required = [
-    "Bash(*)", "WebFetch", "Skill(*)",
+    "WebFetch",
+    "Skill(*)",
     "mcp__supabase__authenticate",
     "mcp__supabase__complete_authentication",
 ]
 
-# Bash(*) always goes first
+# Remove the blanket grants earlier versions of this script wrote.
 allow = [p for p in allow if p != "Bash(*)"]
 existing = set(allow)
-added = [p for p in required if p not in existing and p != "Bash(*)"]
-allow = ["Bash(*)", *allow, *added]
+added = [p for p in required if p not in existing]
+allow = [*allow, *added]
 
 perms["allow"] = allow
-perms["defaultMode"] = "acceptEdits"
+if perms.get("defaultMode") == "acceptEdits":
+    del perms["defaultMode"]
 
 os.makedirs(os.path.dirname(path), exist_ok=True)
 with open(path, "w") as f:
